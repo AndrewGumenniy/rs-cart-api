@@ -2,38 +2,69 @@ import { Injectable } from '@nestjs/common';
 import { v4 } from 'uuid';
 
 import { Order } from '../models';
+import { InjectEntityManager, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Entity, EntityManager, Repository } from 'typeorm';
+import { OrderEntity } from 'src/database/entities/order.entity';
+import { CartEntity } from 'src/database/entities/carts.entity';
+import { StatusType } from 'src/shared';
 
 @Injectable()
 export class OrderService {
-  private orders: Record<string, Order> = {}
+  constructor(
+    @InjectRepository(OrderEntity)
+    private orderRepository: Repository<OrderEntity>,
+    @InjectRepository(CartEntity)
+    private cartRepository: Repository<CartEntity>,
+    @InjectEntityManager()
+    private readonly entityManager: EntityManager,
+  ) {}
 
-  findById(orderId: string): Order {
-    return this.orders[ orderId ];
+  async findById(id: string): Promise<OrderEntity> {
+    return this.orderRepository.findOneBy({ id });
   }
 
-  create(data: any) {
-    const id = v4(v4())
+  async create(data: Order): Promise<OrderEntity> {
     const order = {
       ...data,
-      id,
-      status: 'inProgress',
+      status: StatusType.OPEN
     };
+    const newOrder = this.orderRepository.create(order);
 
-    this.orders[ id ] = order;
+    await this.entityManager.transaction(async () => {
+      await this.orderRepository.save(newOrder);
+      await this.cartRepository.update(
+        { id: data.cartId },
+        { status: StatusType.ORDERED }
+      );
+    });
 
-    return order;
+    return newOrder;
   }
 
-  update(orderId, data) {
-    const order = this.findById(orderId);
+  async update(orderId: string, data): Promise<OrderEntity> {
+    try {
+      const order = await this.findById(orderId);
 
-    if (!order) {
-      throw new Error('Order does not exist.');
-    }
+      if (!order) {
+        throw new Error('Order does not exist.');
+      }
 
-    this.orders[ orderId ] = {
-      ...data,
-      id: orderId,
+      const updatedOrder = {
+        ...data,
+        id: orderId,
+      };
+
+      await this.entityManager.transaction(async () => {
+        await this.orderRepository.update({ id: orderId }, updatedOrder);
+        await this.cartRepository.update(
+          { id: data.cartId },
+          { status: StatusType.ORDERED }
+        );
+      });
+
+      return updatedOrder;
+    } catch (error) {
+      return error;
     }
   }
 }
